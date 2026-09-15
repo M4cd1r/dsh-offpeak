@@ -12,6 +12,7 @@
 import { build } from 'esbuild'
 import { execFileSync } from 'node:child_process'
 import { mkdirSync } from 'node:fs'
+import { resolve } from 'node:path'
 
 mkdirSync('lib', { recursive: true })
 
@@ -48,4 +49,6 @@ await build({
   logLevel: 'info',
 })
 
-execFileSync('node_modules/.bin/tsc', ['-p', 'tsconfig.json'], { stdio: 'inherit' })
+// Windows cannot spawn the pnpm shell shim through execFileSync; use the
+// TypeScript compiler directly and let Node resolve the right binary.
+execFileSync(process.execPath, [resolve('node_modules/typescript/bin/tsc'), '-p', 'tsconfig.json'], { stdio: 'inherit' })

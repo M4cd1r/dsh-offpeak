@@ -12,8 +12,9 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { Remote, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import type { SettingsScope } from '@deepseek-ai/dsh-settings'
-import type { OffpeakSettings, OffpeakSettingsUpdate } from './contract.ts'
-import { applySettingsUpdate } from './defaults.ts'
+import type { OffpeakProviderProfile, OffpeakSettings, OffpeakSettingsUpdate, OffpeakWindowKind } from './contract.ts'
+import { applySettingsUpdate, normalizeOffpeakSettings } from './defaults.ts'
+import { nextSwitchAt, windowKindAt } from './pricing.ts'
 
 /** Off-peak service: the durable pricing preferences, read and written. */
 export class OffpeakRuntime extends TypertRemoteService {
@@ -29,9 +30,41 @@ export class OffpeakRuntime extends TypertRemoteService {
     super(ctx, 'offpeak')
   }
 
-  /** Live settings (schema defaults + user layer). */
+  /** Live settings (schema defaults + user layer), completed for the wire. */
   settingsValue(): OffpeakSettings {
-    return this.settings.get()
+    return normalizeOffpeakSettings(this.settings.get())
+  }
+
+  /**
+   * Exact profile for one provider id, or `undefined` when the provider is not
+   * configured. The model id is accepted for forward compatibility; schedules
+   * are provider-scoped today, so an unknown model still resolves its provider.
+   * Consumers that must not silently inherit another provider's schedule rely
+   * on the `undefined` result.
+   */
+  profileFor(providerId: string, _modelId?: string): OffpeakProviderProfile | undefined {
+    return this.settingsValue().providers.find(provider => provider.id === providerId)
+  }
+
+  /**
+   * Classify one provider/model pair at an instant with the same engine the
+   * status pill uses. Returns `null` for a provider this plugin does not know,
+   * so a consumer can fall back instead of mislabelling the window.
+   */
+  windowKindFor(providerId: string, modelId?: string, at: Date = new Date()): OffpeakWindowKind | null {
+    const profile = this.profileFor(providerId, modelId)
+    if (profile === undefined) return null
+    return windowKindAt(at, profile.peakWindows)
+  }
+
+  /**
+   * Next switch for one provider/model pair, or `null` when the provider is
+   * unknown or bills a flat rate (no switch is ever scheduled).
+   */
+  nextSwitchFor(providerId: string, modelId?: string, at: Date = new Date()): { at: Date; to: OffpeakWindowKind } | null {
+    const profile = this.profileFor(providerId, modelId)
+    if (profile === undefined) return null
+    return nextSwitchAt(at, profile.peakWindows)
   }
 
   /* ---------------- Remote surface (wire namespace `offpeak`) ---------------- */

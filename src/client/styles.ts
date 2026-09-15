@@ -474,6 +474,75 @@ const CSS = `
     transition: none;
   }
 }
+
+/* ---- per-provider surfaces ---- */
+
+.dsh_offpeak_pillProvider {
+  font-weight: 600;
+  opacity: 0.85;
+  max-width: 14ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dsh_offpeak_pill[data-flat='true'] {
+  opacity: 0.75;
+}
+
+.dsh_offpeak_providerList {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.dsh_offpeak_providerCard {
+  border: 1px solid rgba(128, 128, 128, 0.28);
+  border-radius: 8px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.dsh_offpeak_providerCard[data-enabled='false'] {
+  opacity: 0.8;
+}
+
+.dsh_offpeak_providerHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.dsh_offpeak_providerLabel {
+  flex: 1 1 12ch;
+  min-width: 12ch;
+}
+
+.dsh_offpeak_providerId {
+  font-size: 0.85em;
+  opacity: 0.7;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(128, 128, 128, 0.14);
+}
+
+.dsh_offpeak_badge {
+  font-size: 0.8em;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(128, 128, 128, 0.2);
+}
+
+.dsh_offpeak_toggleCompact {
+  gap: 8px;
+}
+
+.dsh_offpeak_fieldWide {
+  grid-column: 1 / -1;
+}
 `
 
 /** The id of the single injected `<style>` element. */
