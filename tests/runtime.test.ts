@@ -105,4 +105,28 @@ describe('OffpeakRuntime', () => {
     expect(settings.displayUtcOffsetMinutes).toBe(0)
     expect(settings.providers).toHaveLength(3)
   })
+
+  it('resolves an exact provider profile for consumer plugins', () => {
+    const { runtime } = makeRuntime()
+    expect(runtime.profileFor(DEEPSEEK_PROVIDER_ID)?.id).toBe(DEEPSEEK_PROVIDER_ID)
+    expect(runtime.profileFor('zai')?.peakMultiplier).toBe(3)
+    expect(runtime.profileFor('does-not-exist')).toBeUndefined()
+  })
+
+  it('classifies provider/model window kinds in UTC', () => {
+    const { runtime } = makeRuntime()
+    expect(runtime.windowKindFor(DEEPSEEK_PROVIDER_ID, 'deepseek-chat', new Date('2026-09-07T02:00:00Z'))).toBe('peak')
+    expect(runtime.windowKindFor(DEEPSEEK_PROVIDER_ID, 'deepseek-chat', new Date('2026-09-07T05:00:00Z'))).toBe('offpeak')
+    expect(runtime.windowKindFor('zai', 'glm-5.2', new Date('2026-09-07T06:30:00Z'))).toBe('peak')
+    expect(runtime.windowKindFor('does-not-exist', undefined, new Date('2026-09-07T06:30:00Z'))).toBeNull()
+  })
+
+  it('reports the next switch and treats flat profiles as never switching', () => {
+    const { runtime } = makeRuntime()
+    const next = runtime.nextSwitchFor(DEEPSEEK_PROVIDER_ID, undefined, new Date('2026-09-07T03:00:00Z'))
+    expect(next?.to).toBe('offpeak')
+    expect(next?.at.toISOString()).toBe('2026-09-07T04:00:00.000Z')
+    expect(runtime.nextSwitchFor('opencode-go', undefined, new Date('2026-09-07T03:00:00Z'))).toBeNull()
+    expect(runtime.nextSwitchFor('does-not-exist')).toBeNull()
+  })
 })
