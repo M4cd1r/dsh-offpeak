@@ -13,7 +13,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { Remote, TypertRemoteService } from '@deepseek-ai/dsh-typert-protocol'
 import type { SettingsScope } from '@deepseek-ai/dsh-settings'
 import type { OffpeakSettings, OffpeakSettingsUpdate } from './contract.ts'
-import { applySettingsUpdate } from './defaults.ts'
+import { applySettingsUpdate, normalizeOffpeakSettings } from './defaults.ts'
 
 /** Off-peak service: the durable pricing preferences, read and written. */
 export class OffpeakRuntime extends TypertRemoteService {
@@ -29,9 +29,9 @@ export class OffpeakRuntime extends TypertRemoteService {
     super(ctx, 'offpeak')
   }
 
-  /** Live settings (schema defaults + user layer). */
+  /** Live settings (schema defaults + user layer), completed for the wire. */
   settingsValue(): OffpeakSettings {
-    return this.settings.get()
+    return normalizeOffpeakSettings(this.settings.get())
   }
 
   /* ---------------- Remote surface (wire namespace `offpeak`) ---------------- */

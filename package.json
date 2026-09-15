@@ -75,6 +75,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.test.json",
     "test": "vitest run",
     "test:watch": "vitest",
+    "verify:schedule": "node --experimental-strip-types scripts/verify-schedule.mjs",
+    "verify:providers": "node scripts/verify-per-provider.mjs",
     "lint": "oxlint .",
     "check": "pnpm run typecheck && pnpm run test && pnpm run lint && pnpm run build",
     "prepublishOnly": "pnpm run check"

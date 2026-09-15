@@ -8,7 +8,8 @@
  */
 // Type-only: the ctx.remote merge and the forwarded Host-event face.
 import type {} from '@deepseek-ai/dsh-api-remotes/client'
-import { createSnapshotStore, type ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
+import type { ClientContext } from '@deepseek-ai/dsh-client-runtime/client'
+import { createSnapshotStore } from './store.ts'
 // Type-only: the composer-dock SlotMap merge for the pill seat.
 import type {} from '@deepseek-ai/dsh-client-ui-conversation/client'
 // Type-only: brings the settings.section SlotMap declaration into this program.
