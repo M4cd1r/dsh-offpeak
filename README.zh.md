@@ -25,6 +25,8 @@ DeepSeek 按 UTC 定义的两个工作日时段计价（法定节假日不计）
 | Z.ai（GLM coding plan） | 06:00 – 10:00 | 周一 – 周五 | 无 | ×3 配额 | ×1 |
 | OpenCode Go | — | — | — | 固定费率 | 固定费率 |
 
+内置的固定费率档案是 **OpenCode Go**。**OpenCode Zen** 是另一款按量计费的产品、没有公开的高峰时段表，因此有意不纳入本插件的表示。
+
 换算到各家本地时区：DeepSeek 高峰为北京时间（UTC+8）09:00 – 12:00 与 14:00 – 18:00，Z.ai 为新加坡时间（UTC+8）14:00 – 18:00——工作日下午两者在北京/新加坡时间的 14:00 – 18:00 重叠。
 
 `windowKindAt` 依据 UTC 时刻、UTC 星期以及服务商的节假日日历归类；跨午夜的窗口归属于其开始日。`nextSwitchAt` 返回的是**聚合时段**真正发生变化的第一刻，而不是下一个原始边界——相邻（`01:00–04:00` + `04:00–06:00`）或重叠（`01:00–05:00` + `04:00–06:00`）的窗口在公共边界上不切换，节假日压制了某个本应高峰的日子时，下次切换会越过整个节假日区间。内置边界固定写在 `src/defaults.ts`：
@@ -32,7 +34,7 @@ DeepSeek 按 UTC 定义的两个工作日时段计价（法定节假日不计）
 - DeepSeek — <https://api-docs.deepseek.com/quick_start/pricing>（*"Peak hours are 01:00 - 04:00 and 06:00 - 10:00 UTC, Monday through Friday"*，不含中国法定节假日）
 - Z.ai — <https://docs.z.ai/devpack/overview>（*"Peak hours: Monday to Friday, 14:00–18:00 Singapore Standard Time (UTC+8)"*）
 
-DeepSeek 的 `holidays` 列表是中国法定节假日的 **2026 年快照**（UTC 日期，`YYYY-MM-DD`），已与 <https://www.timeanddate.com/holidays/china/2026> 交叉核对。它需要每年手动刷新——没有任何机制会替你获取新日历。
+DeepSeek 的 `holidays` 列表是中国法定节假日的 **2026 年快照**（UTC 日期，`YYYY-MM-DD`），已与 <https://www.timeanddate.com/holidays/china/2026> 交叉核对。它需要每年手动刷新——没有任何机制会替你获取新日历。不符合 `YYYY-MM-DD` 的条目会被忽略而不是被采信，因此存储中的畸形日期永远不会破坏设置读取。
 
 时段窗口、倍率、价格与节假日列表都可在设置中修改；以上数值只是默认值。
 
@@ -80,7 +82,7 @@ tarball 则不需要任何构建步骤。
 
 每个服务商档案自带 `peakWindows`、`holidays`、`peakMultiplier`、`inputPricePerM`、`cacheHitPricePerM` 和 `outputPricePerM`。时段窗口以文本编辑——星期限定词后跟 `HH:MM-HH:MM` 区间——因此 DeepSeek 默认为 `Mon-Fri 01:00-04:00, 06:00-10:00`，Z.ai 为 `Mon-Fri 06:00-10:00`。不带限定词的区间每天生效；留空表示该服务商为固定费率，浮标随之不再显示倒计时。
 
-v0.1.0 持久化的设置把四个计价字段放在顶层（`inputPricePerM`、`cacheHitPricePerM`、`outputPricePerM`、`peakMultiplier`）。读取时它们会被迁移到 DeepSeek 服务商档案上；新结构中已在该档案上设置的值优先，且下一次设置写入会以干净的按服务商结构重新持久化。
+v0.1.0 持久化的设置把四个计价字段放在顶层（`inputPricePerM`、`cacheHitPricePerM`、`outputPricePerM`、`peakMultiplier`）。读取时它们会被迁移到 DeepSeek 服务商档案上：只要新结构在存储中**显式保存**了该字段，该值就始终优先——即使它恰好等于内置默认值；只有存储里没有该字段的值时，遗留值才会生效。升级后的第一次读取还会把存储中的这一段重写一次，删掉四个遗留顶层键，使它们无法在后续读取中复现；该写入带有并发写保护、绝不会让读取失败、在键存在期间每轮读取至多触发一次，且迁移后的值原样保留。
 
 DeepSeek 档案的 `holidays` 列表是 2026 年中国法定节假日的 UTC 日期快照，**每年需要刷新一次**（在设置中改，或更新 `src/defaults.ts` 中的默认值），否则引擎会继续沿用上一年的节假日。
 

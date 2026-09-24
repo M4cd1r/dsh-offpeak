@@ -25,6 +25,8 @@ Peak pricing is a property of the **provider**, and the shipped providers disagr
 | Z.ai (GLM coding plan) | 06:00 – 10:00 | Mon – Fri | none | ×3 quota | ×1 |
 | OpenCode Go | — | — | — | flat rate | flat rate |
 
+The flat-rate profile shipped here is **OpenCode Go**. **OpenCode Zen** — a different, pay-as-you-go product with no published peak schedule — is intentionally not represented.
+
 Those same hours in the providers' home timezones: DeepSeek peaks at 09:00 – 12:00 and 14:00 – 18:00 Beijing time (UTC+8), and Z.ai at 14:00 – 18:00 Singapore time (UTC+8) — so on a weekday afternoon the two overlap between 14:00 and 18:00 Beijing/Singapore.
 
 `windowKindAt` classifies an instant by its UTC time of day, its UTC day of week, and the provider's holiday calendar; a window that wraps past midnight belongs to the day it starts on. `nextSwitchAt` reports the first instant the *aggregate* window kind actually changes, not merely the next raw boundary — adjacent (`01:00–04:00` + `04:00–06:00`) and overlapping (`01:00–05:00` + `04:00–06:00`) windows do not switch at their shared boundary, and a holiday that suppresses a would-be peak day pushes the next switch past the whole block. The shipped boundaries are fixed in `src/defaults.ts`:
@@ -32,7 +34,7 @@ Those same hours in the providers' home timezones: DeepSeek peaks at 09:00 – 1
 - DeepSeek — <https://api-docs.deepseek.com/quick_start/pricing> (*"Peak hours are 01:00 - 04:00 and 06:00 - 10:00 UTC, Monday through Friday"*, excluding Chinese public holidays)
 - Z.ai — <https://docs.z.ai/devpack/overview> (*"Peak hours: Monday to Friday, 14:00–18:00 Singapore Standard Time (UTC+8)"*)
 
-The DeepSeek `holidays` list is a **2026 snapshot** of the Chinese public-holiday calendar as UTC dates (`YYYY-MM-DD`), cross-checked against <https://www.timeanddate.com/holidays/china/2026>. It must be refreshed annually — nothing fetches the new calendar for you.
+The DeepSeek `holidays` list is a **2026 snapshot** of the Chinese public-holiday calendar as UTC dates (`YYYY-MM-DD`), cross-checked against <https://www.timeanddate.com/holidays/china/2026>. It must be refreshed annually — nothing fetches the new calendar for you. An entry that does not match `YYYY-MM-DD` is ignored rather than trusted, so a malformed stored date can never break the settings read.
 
 Every window, multiplier, price, and holiday list is editable in Settings; the values above are only the defaults.
 
@@ -82,7 +84,7 @@ The `offpeak` settings namespace is registered with `applies: 'live'`: every fie
 
 Each provider profile holds its own `peakWindows`, `holidays`, `peakMultiplier`, `inputPricePerM`, `cacheHitPricePerM`, and `outputPricePerM`. A window is editable as text — a day qualifier followed by `HH:MM-HH:MM` ranges — so DeepSeek ships as `Mon-Fri 01:00-04:00, 06:00-10:00` and Z.ai as `Mon-Fri 06:00-10:00`. A range written with no qualifier applies every day; an empty field means the provider bills a flat rate, and the pill then shows no countdown.
 
-Settings persisted by v0.1.0 carried the pricing values at the top level (`inputPricePerM`, `cacheHitPricePerM`, `outputPricePerM`, `peakMultiplier`). On read they are migrated onto the DeepSeek provider profile; a value already set on the provider in the new shape takes precedence, and the next settings write re-persists the clean per-provider shape.
+Settings persisted by v0.1.0 carried the pricing values at the top level (`inputPricePerM`, `cacheHitPricePerM`, `outputPricePerM`, `peakMultiplier`). On read they are migrated onto the DeepSeek provider profile, where a value **explicitly stored** on the provider in the new shape always wins — even when it happens to equal the shipped default — and a legacy value applies only when the stored section carries no value for that field. The first read after the upgrade also rewrites the stored section once, dropping the four legacy keys so they cannot resurface on later reads; that purge is guarded against concurrent writes, never fails the read, happens at most once while the keys are present, and keeps every migrated value in place.
 
 The default DeepSeek prices are the official `deepseek-flash` off-peak prices in USD per 1M tokens: `0.15` input (cache miss), `0.003` cache hit, `0.6` output. The Z.ai profile ships no per-token prices, because a coding plan bills quota rather than tokens — only its multiplier is meaningful. On the day DeepSeek moves its prices, the defaults here go stale: they are editable, they are not fetched, and nothing verifies them.
 

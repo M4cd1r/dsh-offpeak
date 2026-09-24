@@ -62,7 +62,11 @@ export interface OffpeakProviderProfile {
   /**
    * UTC calendar dates (`YYYY-MM-DD`) on which no peak window is billed at all,
    * whatever the window list says — DeepSeek excludes Chinese public holidays.
-   * Empty for providers without a published holiday rule.
+   * Empty for providers without a published holiday rule. The storage schema
+   * accepts any string and the engine never matches a malformed one, but the
+   * wire contract is strict: `normalizeProviderProfile` filters entries to
+   * `HOLIDAY_DATE_PATTERN` before the value leaves the host, so a malformed
+   * stored entry can never fail `getSettings` validation.
    */
   readonly holidays: readonly string[]
   /** Input (cache-miss) price in USD per 1M tokens outside peak windows. */
@@ -107,6 +111,17 @@ export type OffpeakSettingsUpdate =
 
 export const currencySchema = z.enum(['USD', 'CNY'])
 
+/**
+ * The one accepted holiday representation: a UTC calendar date as `YYYY-MM-DD`.
+ *
+ * Shared by this wire codec and by `normalizeProviderProfile` on the host read
+ * path: storage deliberately accepts any string (a stricter storage schema
+ * would fail *registration* on a bad value and brick the plugin), so the
+ * normalization step repairs a malformed entry to this shape before anything
+ * crosses the wire. Whatever reaches the codec therefore always matches.
+ */
+export const HOLIDAY_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/u
+
 export const offpeakWindowKindSchema = z.enum(['peak', 'offpeak'])
 
 export const peakWindowSpecSchema = z.object({
@@ -121,7 +136,7 @@ export const offpeakProviderProfileSchema = z.object({
   enabled: z.boolean(),
   peakMultiplier: z.number().min(1).max(100),
   peakWindows: z.array(peakWindowSpecSchema).readonly(),
-  holidays: z.array(z.string().regex(/^\d{4}-\d{2}-\d{2}$/u)).readonly(),
+  holidays: z.array(z.string().regex(HOLIDAY_DATE_PATTERN)).readonly(),
   inputPricePerM: z.number().min(0),
   cacheHitPricePerM: z.number().min(0),
   outputPricePerM: z.number().min(0),

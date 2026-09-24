@@ -8,10 +8,20 @@
  * May 4 / Jun 19 / Sep 25 / Oct 5 are Mondays or Fridays inside the calendar,
  * and Jan 5 / Apr 7 / May 6 / Jun 22 / Sep 24 / Oct 8 are the adjacent
  * ordinary weekdays around them.
+ *
+ * The final describe block is a read-path contract: a malformed holiday entry
+ * that somehow reached storage must never reach the wire codec, because the
+ * wire contract requires `YYYY-MM-DD` and a violation there bricks the
+ * client's `getSettings` result validation.
  */
+import { Context } from '@deepseek-ai/cordis'
 import { describe, expect, it } from 'vitest'
-import type { PeakWindowSpec } from '../src/contract.ts'
-import { defaultProviderProfiles } from '../src/defaults.ts'
+import type { SettingsScope } from '@deepseek-ai/dsh-settings'
+import type { OffpeakSettings, PeakWindowSpec } from '../src/contract.ts'
+import { offpeakSettingsSchema } from '../src/contract.ts'
+import { OffpeakRuntime } from '../src/runtime.ts'
+import { OffpeakSettingsSchema } from '../src/settings.ts'
+import { defaultOffpeakSettings, defaultProviderProfiles } from '../src/defaults.ts'
 import { msUntilNextSwitch, nextSwitchAt, windowKindAt } from '../src/pricing.ts'
 
 /** DeepSeek's two published weekday peak windows, in UTC. */
@@ -124,7 +134,7 @@ describe('nextSwitchAt honors holidays', () => {
     expect(next?.to).toBe('peak')
   })
 
-  it('reports no switch while inside a holiday', () => {
+  it('reports the first switch after the holiday block when started inside it', () => {
     const next = nextSwitchAt(at('2026-10-01', 0, 30), DEEPSEEK_WINDOWS, CALENDAR_2026)
     expect(next?.at.toISOString()).toBe('2026-10-08T01:00:00.000Z')
     expect(next?.to).toBe('peak')
@@ -143,6 +153,51 @@ describe('nextSwitchAt honors holidays', () => {
   it('measures the countdown across a holiday week', () => {
     expect(msUntilNextSwitch(at('2026-09-30', 20), DEEPSEEK_WINDOWS, CALENDAR_2026))
       .toBe(173 * 3600_000)
+  })
+})
+
+/** Resolve a raw stored section through the real settings schema, as the host does. */
+const resolveSection = (raw: unknown): OffpeakSettings =>
+  (OffpeakSettingsSchema as unknown as (value: unknown) => OffpeakSettings)(raw)
+
+/**
+ * Read `getSettings()` from a section that stored one malformed holiday
+ * beside a valid one — the exact shape a hand-edited or corrupted document
+ * can produce, which the permissive storage schema accepts.
+ */
+async function getSettingsWithMalformedHoliday(): Promise<OffpeakSettings> {
+  const settings = defaultOffpeakSettings()
+  const stored = {
+    ...settings,
+    providers: settings.providers.map(provider => provider.id === 'deepseek-official'
+      ? { ...provider, holidays: ['not-a-date', '2026-10-05'] }
+      : provider),
+  }
+  const scope: SettingsScope<OffpeakSettings> = {
+    get: () => resolveSection(stored),
+    watch: () => () => {},
+    update: async () => {},
+    replace: async () => {},
+  }
+  return new OffpeakRuntime(new Context(), scope).getSettings()
+}
+
+describe('a malformed stored holiday entry never breaks getSettings', () => {
+  it('returns a wire-valid section with the malformed entry dropped', async () => {
+    const read = await getSettingsWithMalformedHoliday()
+    // This is the wire contract getSettings' strict result codec enforces
+    // (OFFPEAK_INVOCATIONS): a malformed entry here bricks the client call.
+    expect(offpeakSettingsSchema.safeParse(read).success).toBe(true)
+    const deepseek = read.providers.find(provider => provider.id === 'deepseek-official')
+    expect(deepseek?.holidays).not.toContain('not-a-date')
+  })
+
+  it('keeps the valid stored dates suppressing peak as before', async () => {
+    const read = await getSettingsWithMalformedHoliday()
+    const deepseek = read.providers.find(provider => provider.id === 'deepseek-official')
+    expect(deepseek?.holidays).toContain('2026-10-05')
+    expect(windowKindAt(at('2026-10-05', 8), DEEPSEEK_WINDOWS, deepseek?.holidays ?? [])).toBe('offpeak')
+    expect(windowKindAt(at('2026-10-08', 8), DEEPSEEK_WINDOWS, deepseek?.holidays ?? [])).toBe('peak')
   })
 })
 

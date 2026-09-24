@@ -133,22 +133,29 @@ check('provider edit left deepseek untouched', edited.providers.find(p => p.id =
 check('unknown active id falls back to the first provider', resolveActiveProfile({ ...settings, activeProviderId: 'nope' }).id, 'deepseek-official')
 
 // The v0.1.0 top-level pricing fields migrate onto the deepseek profile, with
-// new-shape provider values taking precedence.
-const legacyShape = {
-  ...defaultOffpeakSettings(),
+// explicitly stored new-shape provider values taking precedence — presence in
+// the RAW stored section decides, never a value comparison.
+const storedV010 = {
   inputPricePerM: 0.28,
   cacheHitPricePerM: 0.028,
   outputPricePerM: 0.42,
   peakMultiplier: 3,
 }
-const migrated = normalizeOffpeakSettings(legacyShape)
+const legacyShape = {
+  ...defaultOffpeakSettings(),
+  ...storedV010,
+}
+const migrated = normalizeOffpeakSettings(legacyShape, storedV010)
 const migratedDeepseek = migrated.providers.find(p => p.id === 'deepseek-official')
 check('legacy pricing migrates onto deepseek', [migratedDeepseek.inputPricePerM, migratedDeepseek.cacheHitPricePerM, migratedDeepseek.outputPricePerM, migratedDeepseek.peakMultiplier], [0.28, 0.028, 0.42, 3])
+const hybridProviders = defaultProviderProfiles().map(p => p.id === 'deepseek-official' ? { ...p, inputPricePerM: 0.2 } : p)
 const hybridShape = {
   ...legacyShape,
-  providers: defaultProviderProfiles().map(p => p.id === 'deepseek-official' ? { ...p, inputPricePerM: 0.2 } : p),
+  providers: hybridProviders,
 }
-check('a new-shape provider value wins over the legacy value', normalizeOffpeakSettings(hybridShape).providers.find(p => p.id === 'deepseek-official').inputPricePerM, 0.2)
+check('a new-shape provider value wins over the legacy value', normalizeOffpeakSettings(hybridShape, { ...storedV010, providers: hybridProviders }).providers.find(p => p.id === 'deepseek-official').inputPricePerM, 0.2)
+const atDefaultShape = { ...legacyShape, providers: defaultProviderProfiles() }
+check('an explicitly stored value equal to the shipped default also wins', normalizeOffpeakSettings(atDefaultShape, { ...storedV010, providers: defaultProviderProfiles() }).providers.find(p => p.id === 'deepseek-official').inputPricePerM, 0.15)
 
 console.log(failures === 0 ? '\nALL CHECKS PASSED' : `\n${failures} CHECK(S) FAILED`)
 process.exit(failures === 0 ? 0 : 1)

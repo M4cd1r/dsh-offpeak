@@ -212,17 +212,25 @@ const persistedV010 = {
   displayUtcOffsetMinutes: 0,
 }
 const resolvedSection = OffpeakSettingsSchema(persistedV010)
-const migrated = normalizeOffpeakSettings(resolvedSection)
+// Precedence is decided against the RAW stored section (key presence), which
+// for v0.1.0 carries the legacy keys and no provider list at all.
+const migrated = normalizeOffpeakSettings(resolvedSection, persistedV010)
 const migratedDeepseek = migrated.providers.find(p => p.id === 'deepseek-official')
 check('the schema resolution keeps the legacy values visible', resolvedSection.inputPricePerM, 0.28)
 check('legacy prices land on the DeepSeek profile', [migratedDeepseek.inputPricePerM, migratedDeepseek.cacheHitPricePerM, migratedDeepseek.outputPricePerM], [0.28, 0.028, 0.42])
 check('the legacy multiplier lands too', migratedDeepseek.peakMultiplier, 3)
 check('the legacy top-level keys are stripped from the result', ['inputPricePerM', 'cacheHitPricePerM', 'outputPricePerM', 'peakMultiplier'].every(key => !(key in migrated)), true)
-const hybrid = normalizeOffpeakSettings({
-  ...resolvedSection,
-  providers: defaultProviderProfiles().map(p => p.id === 'deepseek-official' ? { ...p, inputPricePerM: 0.2 } : p),
-})
+const hybridProviders = defaultProviderProfiles().map(p => p.id === 'deepseek-official' ? { ...p, inputPricePerM: 0.2 } : p)
+const hybrid = normalizeOffpeakSettings(
+  { ...resolvedSection, providers: hybridProviders },
+  { ...persistedV010, providers: hybridProviders },
+)
 check('a new-shape provider value wins over the legacy one', hybrid.providers.find(p => p.id === 'deepseek-official').inputPricePerM, 0.2)
+const atDefault = normalizeOffpeakSettings(
+  { ...resolvedSection, providers: defaultProviderProfiles() },
+  { ...persistedV010, providers: defaultProviderProfiles() },
+)
+check('an explicitly stored value equal to the shipped default also wins', atDefault.providers.find(p => p.id === 'deepseek-official').inputPricePerM, 0.15)
 check('a current-shaped section round-trips untouched', normalizeOffpeakSettings(defaultOffpeakSettings()), defaultOffpeakSettings())
 
 console.log(failures === 0 ? '\nALL CHECKS PASSED' : `\n${failures} CHECK(S) FAILED`)

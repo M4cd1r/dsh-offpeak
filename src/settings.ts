@@ -58,6 +58,12 @@ const providerProfileSchema = z.object({
    * window. Profiles persisted before the holiday calendar existed carry no
    * `holidays` key; the default keeps those providers peaking on holidays,
    * which is what they published.
+   *
+   * Deliberately a plain string array: the wire contract (contract.ts) is the
+   * strict `YYYY-MM-DD` gate, and rejecting a malformed stored entry *here*
+   * would fail namespace registration and brick the plugin. A bad entry is
+   * repaired instead — `normalizeProviderProfile` filters it out before the
+   * value reaches the wire.
    */
   holidays: z.array(z.string()).default([]),
   inputPricePerM: z.number().min(0).default(0),

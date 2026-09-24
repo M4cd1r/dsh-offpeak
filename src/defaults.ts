@@ -19,12 +19,13 @@
  *             "Peak hours: Monday to Friday, 14:00–18:00 Singapore Standard
  *              Time (UTC+8)." GLM-5.2 burns plan quota at 3× inside that window.
  */
-import type {
-  OffpeakDay,
-  OffpeakProviderProfile,
-  OffpeakSettings,
-  OffpeakSettingsUpdate,
-  PeakWindowSpec,
+import {
+  HOLIDAY_DATE_PATTERN,
+  type OffpeakDay,
+  type OffpeakProviderProfile,
+  type OffpeakSettings,
+  type OffpeakSettingsUpdate,
+  type PeakWindowSpec,
 } from './contract.ts'
 
 /** The working week both shipped providers bill as peak. */
@@ -186,42 +187,85 @@ export interface LegacyOffpeakPricing {
 /** A settings section as the host may read it: the new shape plus optional legacy pricing fields. */
 export type OffpeakSettingsSection = OffpeakSettings & LegacyOffpeakPricing
 
+/**
+ * A raw *stored* section — the user layer exactly as
+ * `ctx.settings.describe()` reports it, WITHOUT schema defaults. Only the
+ * keys the stored document actually carries are present, both at the top
+ * level and inside each provider entry, so key **presence** (not value) is
+ * what marks a provider field as explicitly stored — the fact the legacy
+ * precedence below decides on.
+ */
+export type StoredOffpeakSection = Partial<Omit<OffpeakSettingsSection, 'providers'>> & {
+  readonly providers?: readonly Partial<OffpeakProviderProfile>[]
+}
+
 /** The four legacy field names, for presence checks and removal. */
 const LEGACY_PRICING_KEYS = ['inputPricePerM', 'cacheHitPricePerM', 'outputPricePerM', 'peakMultiplier'] as const
 
-/** The shipped DeepSeek profile, against which "still a default value" is decided. */
-function shippedDeepseekProfile(): OffpeakProviderProfile {
-  return defaultProviderProfiles().find(provider => provider.id === DEEPSEEK_PROVIDER_ID) as OffpeakProviderProfile
+/**
+ * Whether a section still carries any of the four legacy top-level pricing
+ * keys. This is the trigger for the read path's one-shot storage purge: once
+ * a read sees `false`, the legacy keys are gone from storage and cannot
+ * resurface on any later read.
+ *
+ * @param section - a resolved section, a raw stored section, or `undefined`.
+ * @returns whether at least one legacy key is present with a value.
+ */
+export function hasLegacyPricing(section: OffpeakSettingsSection | StoredOffpeakSection | undefined): boolean {
+  if (section === undefined) return false
+  return LEGACY_PRICING_KEYS.some(key => section[key] !== undefined)
 }
 
 /**
- * Resolve one field under legacy precedence: a legacy value applies only when
- * the new-shape profile still carries the shipped default, so a value the user
- * already set on the provider always wins over the legacy top-level one.
+ * Resolve one legacy-priced field under stored-section precedence:
+ *
+ * - no legacy value → the provider value stands;
+ * - the stored section explicitly carries the provider field → that value
+ *   **always wins, even when it equals the shipped default** (comparing
+ *   values against the default, as the first cut did, silently reversed the
+ *   precedence exactly there);
+ * - otherwise the stored section carries no value for the field, so the
+ *   legacy value applies.
+ *
+ * When no stored section is available (a caller passing only the resolved
+ * view), nothing can be known to be explicit and the legacy value applies,
+ * which keeps a pure v0.1.0 migration working. The runtime always supplies
+ * the stored section through `ctx.settings.describe()`, so production
+ * precedence is the exact presence test.
  */
-function legacyOrProvider(legacy: number | undefined, providerValue: number, shippedDefault: number): number {
+function legacyOrProvider(legacy: number | undefined, providerValue: number, explicitlyStored: boolean): number {
   if (legacy === undefined) return providerValue
-  return providerValue === shippedDefault ? legacy : providerValue
+  return explicitlyStored ? providerValue : legacy
 }
 
 /**
  * Migrate a persisted settings section to the per-provider shape. v0.1.0
  * persisted pricing as four top-level fields; those values are applied to the
- * `deepseek-official` profile, where new-shape values take precedence. The
- * input is never mutated and the result carries no legacy keys.
+ * `deepseek-official` profile, where a provider value explicitly present in
+ * the stored section always takes precedence (see {@link legacyOrProvider}).
+ * The input is never mutated and the result carries no legacy keys — the
+ * migrated values the read path's purge persists in their place.
+ *
+ * @param section - the schema-resolved section; legacy keys pass through
+ *   resolution, so they are visible here.
+ * @param stored - the raw stored section, when the caller can read it
+ *   (`ctx.settings.describe()` on the runtime path); its key presence decides
+ *   which side of the precedence wins.
  */
-export function migrateLegacyOffpeakSettings(section: OffpeakSettingsSection): OffpeakSettings {
-  const carriesLegacy = LEGACY_PRICING_KEYS.some(key => section[key] !== undefined)
+export function migrateLegacyOffpeakSettings(section: OffpeakSettingsSection, stored?: StoredOffpeakSection): OffpeakSettings {
+  const carriesLegacy = hasLegacyPricing(section)
   const providers = carriesLegacy
     ? section.providers.map((provider) => {
       if (provider.id !== DEEPSEEK_PROVIDER_ID) return provider
-      const shipped = shippedDeepseekProfile()
+      const storedProvider = stored?.providers?.find(profile => profile.id === DEEPSEEK_PROVIDER_ID)
+      const explicit = (key: (typeof LEGACY_PRICING_KEYS)[number]): boolean =>
+        storedProvider !== undefined && storedProvider[key] !== undefined
       return {
         ...provider,
-        inputPricePerM: legacyOrProvider(section.inputPricePerM, provider.inputPricePerM, shipped.inputPricePerM),
-        cacheHitPricePerM: legacyOrProvider(section.cacheHitPricePerM, provider.cacheHitPricePerM, shipped.cacheHitPricePerM),
-        outputPricePerM: legacyOrProvider(section.outputPricePerM, provider.outputPricePerM, shipped.outputPricePerM),
-        peakMultiplier: legacyOrProvider(section.peakMultiplier, provider.peakMultiplier, shipped.peakMultiplier),
+        inputPricePerM: legacyOrProvider(section.inputPricePerM, provider.inputPricePerM, explicit('inputPricePerM')),
+        cacheHitPricePerM: legacyOrProvider(section.cacheHitPricePerM, provider.cacheHitPricePerM, explicit('cacheHitPricePerM')),
+        outputPricePerM: legacyOrProvider(section.outputPricePerM, provider.outputPricePerM, explicit('outputPricePerM')),
+        peakMultiplier: legacyOrProvider(section.peakMultiplier, provider.peakMultiplier, explicit('peakMultiplier')),
       }
     })
     : section.providers
@@ -248,18 +292,30 @@ export function normalizeProviderProfile(profile: OffpeakProviderProfile): Offpe
   return {
     ...profile,
     peakWindows: profile.peakWindows.map(normalizeWindow),
-    holidays: profile.holidays ?? [],
+    // Repair, do not reject: the storage schema accepts any string (rejecting
+    // it there would fail settings registration and brick the plugin), but the
+    // wire contract requires `YYYY-MM-DD`, so a malformed entry dropped here
+    // can never fail `getSettings` result validation. The engine is also
+    // immune to malformed entries — its holiday keys are well-formed UTC date
+    // strings — so dropping one only removes noise, never behaviour.
+    holidays: (profile.holidays ?? []).filter(date => HOLIDAY_DATE_PATTERN.test(date)),
   }
 }
 
 /**
  * Complete a whole settings section read from durable settings: migrate any
- * legacy top-level pricing onto the DeepSeek provider, then complete every
- * profile so one persisted before the weekday gate or the holiday calendar
- * existed still resolves each field it displays.
+ * legacy top-level pricing onto the DeepSeek provider using the raw stored
+ * section's key presence, then complete every profile so one persisted before
+ * the weekday gate or the holiday calendar existed still resolves each field
+ * it displays — dropping holiday entries that are not `YYYY-MM-DD` so a
+ * malformed stored date can never fail the wire contract.
+ *
+ * @param section - the schema-resolved section.
+ * @param stored - the raw stored section, when the caller can read it; see
+ *   {@link migrateLegacyOffpeakSettings} for how it steers precedence.
  */
-export function normalizeOffpeakSettings(section: OffpeakSettingsSection): OffpeakSettings {
-  const migrated = migrateLegacyOffpeakSettings(section)
+export function normalizeOffpeakSettings(section: OffpeakSettingsSection, stored?: StoredOffpeakSection): OffpeakSettings {
+  const migrated = migrateLegacyOffpeakSettings(section, stored)
   return { ...migrated, providers: migrated.providers.map(normalizeProviderProfile) }
 }
 
