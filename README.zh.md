@@ -7,7 +7,7 @@
 [![license](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![node](https://img.shields.io/badge/node-%E2%89%A522.19-brightgreen)](package.json)
 
-DeepSeek 按 UTC 定义的两个每日时段计价。本插件把这件事放到你看得见的地方：在 DeepSeek Harness Web GUI 的输入框下方显示一个状态浮标，给出当前时段、价格倍率与距下次切换的倒计时；鼠标悬停时展开当前有效价格和切换时间。
+DeepSeek 按 UTC 定义的两个工作日时段计价（法定节假日不计），Z.ai 的 Coding Plan 则是第三个时段。本插件把这件事放到你看得见的地方：在 DeepSeek Harness Web GUI 的输入框下方显示一个状态浮标，给出当前服务商（provider）的时段、价格倍率与距下次切换的倒计时；鼠标悬停时展开当前有效价格和切换时间。
 
 插件就这些。它不注册任何工具与命令，不向任何模型请求贡献内容，不写任何文件，也不发起任何网络请求。
 
@@ -17,12 +17,24 @@ DeepSeek 按 UTC 定义的两个每日时段计价。本插件把这件事放到
 
 ## 计价时段
 
-| 时段 | UTC 时间 | 价格 |
-| --- | --- | --- |
-| 高峰 | 08:30 – 16:30 | `peakMultiplier` × 基础价（官方值 **2**） |
-| 错峰 | 16:30 – 08:30 | 基础价 |
+高峰计价是**服务商**的属性，内置的几家各不相同，因此每个 provider 档案自带时段窗口、倍率、价格表和节假日日历。两家内置高峰时段都仅限工作日：周六、周日一律错峰。DeepSeek 还额外排除中国法定节假日：其档案 `holidays` 日历中列出的 UTC 日期全天错峰，不受时段窗口与星期门控影响。
 
-时段边界取自 DeepSeek 公布的窗口，固定写在 `src/pricing.ts` 中；倍率、三档基础价、显示货币和显示时区都是设置项。`windowKindAt` 将边界时刻归入从该时刻开始的那个时段：08:30:00.000 UTC 属于高峰，16:30:00.000 UTC 属于错峰。
+| 服务商 | 高峰时段（UTC） | 星期 | 节假日 | 高峰 | 错峰 |
+| --- | --- | --- | --- | --- | --- |
+| DeepSeek | 01:00 – 04:00 与 06:00 – 10:00 | 周一 – 周五 | 2026 中国法定节假日 | ×2 | ×1 |
+| Z.ai（GLM coding plan） | 06:00 – 10:00 | 周一 – 周五 | 无 | ×3 配额 | ×1 |
+| OpenCode Go | — | — | — | 固定费率 | 固定费率 |
+
+换算到各家本地时区：DeepSeek 高峰为北京时间（UTC+8）09:00 – 12:00 与 14:00 – 18:00，Z.ai 为新加坡时间（UTC+8）14:00 – 18:00——工作日下午两者在北京/新加坡时间的 14:00 – 18:00 重叠。
+
+`windowKindAt` 依据 UTC 时刻、UTC 星期以及服务商的节假日日历归类；跨午夜的窗口归属于其开始日。`nextSwitchAt` 返回的是**聚合时段**真正发生变化的第一刻，而不是下一个原始边界——相邻（`01:00–04:00` + `04:00–06:00`）或重叠（`01:00–05:00` + `04:00–06:00`）的窗口在公共边界上不切换，节假日压制了某个本应高峰的日子时，下次切换会越过整个节假日区间。内置边界固定写在 `src/defaults.ts`：
+
+- DeepSeek — <https://api-docs.deepseek.com/quick_start/pricing>（*"Peak hours are 01:00 - 04:00 and 06:00 - 10:00 UTC, Monday through Friday"*，不含中国法定节假日）
+- Z.ai — <https://docs.z.ai/devpack/overview>（*"Peak hours: Monday to Friday, 14:00–18:00 Singapore Standard Time (UTC+8)"*）
+
+DeepSeek 的 `holidays` 列表是中国法定节假日的 **2026 年快照**（UTC 日期，`YYYY-MM-DD`），已与 <https://www.timeanddate.com/holidays/china/2026> 交叉核对。它需要每年手动刷新——没有任何机制会替你获取新日历。
+
+时段窗口、倍率、价格与节假日列表都可在设置中修改；以上数值只是默认值。
 
 浮标显示的价格是**你自己填的价格**乘以倍率。插件不读取计价页，也不读取账单，因此官方调价后需要你自己更新。
 
@@ -49,6 +61,8 @@ tarball 则不需要任何构建步骤。
 
 这些全部由浏览器根据下方设置和浏览器自身时钟推导得出，走的是 host 侧校验过的同一个纯模块——因此浮标不可能与它读取的设置脱节。
 
+浮标读取的是 `activeProviderId` 选中的档案。服务商选择是**手动**的：浮标不会推断当前会话实际使用的服务商，切换网关时需要一并切换该设置。
+
 ## 配置
 
 `offpeak` 设置命名空间以 `applies: 'live'` 注册：每个字段改动即刻生效，无需重启。
@@ -60,13 +74,15 @@ tarball 则不需要任何构建步骤。
 | `enabled` | `true` | 是否显示浮标 |
 | `currency` | `USD` | 显示货币（`USD` 或 `CNY`，按 `cnyPerUsd` 换算） |
 | `cnyPerUsd` | `7.1` | 美元→人民币系数，仅用于展示 |
-| `inputPricePerM` | `0.28` | 输入（缓存未命中）基础价，USD / 1M tokens |
-| `cacheHitPricePerM` | `0.028` | 缓存命中基础价，USD / 1M tokens |
-| `outputPricePerM` | `0.42` | 输出基础价，USD / 1M tokens |
-| `peakMultiplier` | `2` | 高峰时段的价格倍率（1–100） |
 | `displayUtcOffsetMinutes` | `480` | 展示切换时间所用的时区偏移；时段本身按 UTC 定义 |
+| `activeProviderId` | `deepseek-official` | 浮标读取哪个服务商档案（手动选择，不从会话推断） |
+| `providers[]` | 见上文 | 每个网关一份档案：label、enabled、`peakWindows`、`holidays`、`peakMultiplier` 与三档基础价 |
 
-默认值取自撰写时 DeepSeek 公布的价格，请及时更新。
+每个服务商档案自带 `peakWindows`、`holidays`、`peakMultiplier`、`inputPricePerM`、`cacheHitPricePerM` 和 `outputPricePerM`。时段窗口以文本编辑——星期限定词后跟 `HH:MM-HH:MM` 区间——因此 DeepSeek 默认为 `Mon-Fri 01:00-04:00, 06:00-10:00`，Z.ai 为 `Mon-Fri 06:00-10:00`。不带限定词的区间每天生效；留空表示该服务商为固定费率，浮标随之不再显示倒计时。
+
+v0.1.0 持久化的设置把四个计价字段放在顶层（`inputPricePerM`、`cacheHitPricePerM`、`outputPricePerM`、`peakMultiplier`）。读取时它们会被迁移到 DeepSeek 服务商档案上；新结构中已在该档案上设置的值优先，且下一次设置写入会以干净的按服务商结构重新持久化。
+
+DeepSeek 档案的 `holidays` 列表是 2026 年中国法定节假日的 UTC 日期快照，**每年需要刷新一次**（在设置中改，或更新 `src/defaults.ts` 中的默认值），否则引擎会继续沿用上一年的节假日。
 
 ## 组合方式
 
@@ -106,6 +122,7 @@ pnpm run test:watch
 ```
 src/
   pricing.ts     纯时段计算与展示助手——host 与浏览器共用
+  defaults.ts    内置服务商档案（官方时段窗口、倍率、价格、节假日日历）
   contract.ts    传输契约：设置类型、zod 编解码器、Typert invocation
   settings.ts    `offpeak` 设置命名空间
   runtime.ts     OffpeakRuntime——`offpeak` Typert Remote 服务
@@ -121,7 +138,9 @@ tests/           时段边界、Remote 接口、样式表与词典契约
 ## 已知限制与后续工作
 
 - **价格是你填的，不是 DeepSeek 给的。** 没有任何机制会拿它与官方计价页或你的实际账单核对，价格表过期时显示的就是自信而错误的数字。
-- **时段边界固定在代码中。** 只有倍率与价格可配置；若服务商调整时段窗口，需要改代码。
+- **内置时段是快照。** 默认值撰写时读自各服务商的计价页；若服务商调整时段窗口，直接改档案——时段边界如今是设置项，不再是代码。
+- **DeepSeek 节假日日历是 2026 年快照。** 内置 `holidays` 列表仅覆盖 2026 年，且没有任何机制自动刷新；每年春节过后列表就会过期，直到你（或插件更新）替换它。
+- **星期门控按 UTC。** 星期与节假日日期都按 UTC 而非服务商本地时区判定。对两家内置时段而言这正是官方公布口径，但跨 UTC 午夜落入不同本地星期的窗口需要手工写明星期列表。
 - **倒计时依据浏览器时钟。** 机器时钟严重不准时，显示的时段也会严重不准。
 - **仅限 Web。** 浮标与设置面板都是浏览器界面；没有 Web app 的 profile 会加载插件但什么也看不到。
 

@@ -48,23 +48,25 @@ export class OffpeakRuntime extends TypertRemoteService {
 
   /**
    * Classify one provider/model pair at an instant with the same engine the
-   * status pill uses. Returns `null` for a provider this plugin does not know,
-   * so a consumer can fall back instead of mislabelling the window.
+   * status pill uses, holidays included. Returns `null` for a provider this
+   * plugin does not know, so a consumer can fall back instead of mislabelling
+   * the window.
    */
   windowKindFor(providerId: string, modelId?: string, at: Date = new Date()): OffpeakWindowKind | null {
     const profile = this.profileFor(providerId, modelId)
     if (profile === undefined) return null
-    return windowKindAt(at, profile.peakWindows)
+    return windowKindAt(at, profile.peakWindows, profile.holidays)
   }
 
   /**
-   * Next switch for one provider/model pair, or `null` when the provider is
-   * unknown or bills a flat rate (no switch is ever scheduled).
+   * Next aggregate-kind switch for one provider/model pair, or `null` when the
+   * provider is unknown or its kind never changes (a flat rate schedules no
+   * switch).
    */
   nextSwitchFor(providerId: string, modelId?: string, at: Date = new Date()): { at: Date; to: OffpeakWindowKind } | null {
     const profile = this.profileFor(providerId, modelId)
     if (profile === undefined) return null
-    return nextSwitchAt(at, profile.peakWindows)
+    return nextSwitchAt(at, profile.peakWindows, profile.holidays)
   }
 
   /* ---------------- Remote surface (wire namespace `offpeak`) ---------------- */

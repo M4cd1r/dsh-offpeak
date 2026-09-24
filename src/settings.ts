@@ -53,12 +53,27 @@ const providerProfileSchema = z.object({
   enabled: z.boolean().default(false),
   peakMultiplier: z.number().min(1).max(100).default(2),
   peakWindows: z.array(peakWindowSchema).default([]),
+  /**
+   * Holiday dates (`YYYY-MM-DD`, UTC) on which the provider bills no peak
+   * window. Profiles persisted before the holiday calendar existed carry no
+   * `holidays` key; the default keeps those providers peaking on holidays,
+   * which is what they published.
+   */
+  holidays: z.array(z.string()).default([]),
   inputPricePerM: z.number().min(0).default(0),
   cacheHitPricePerM: z.number().min(0).default(0),
   outputPricePerM: z.number().min(0).default(0),
 }) as unknown as z<OffpeakProviderProfile>
 
-/** Schemastery schema of the `offpeak` namespace section. */
+/**
+ * Schemastery schema of the `offpeak` namespace section.
+ *
+ * A section persisted by v0.1.0 carries four top-level pricing fields
+ * (`inputPricePerM`, `cacheHitPricePerM`, `outputPricePerM`, `peakMultiplier`)
+ * this schema no longer declares. Schemastery passes unknown keys through
+ * resolution, so they survive the read; `normalizeOffpeakSettings` then
+ * migrates them onto the DeepSeek provider profile.
+ */
 export const OffpeakSettingsSchema: z<OffpeakSettings> = z.object({
   enabled: z.boolean().default(true),
   currency: z.union(['USD', 'CNY'] as const).default('USD'),

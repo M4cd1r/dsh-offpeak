@@ -17,22 +17,24 @@ That is the whole plugin. It registers no tools and no commands, contributes not
 
 ## Pricing windows
 
-Peak pricing is a property of the **provider**, and the shipped providers disagree, so every provider profile carries its own windows, multiplier, and prices. Both shipped schedules are weekday-only: Saturday and Sunday are off-peak for each of them.
+Peak pricing is a property of the **provider**, and the shipped providers disagree, so every provider profile carries its own windows, multiplier, prices, and holiday calendar. Both shipped schedules are weekday-only: Saturday and Sunday are off-peak for each of them. DeepSeek additionally excludes Chinese public holidays: every date listed in its profile's `holidays` calendar is off-peak for the whole UTC day, whatever the window gates say.
 
-| Provider | Peak hours (UTC) | Days | Peak | Off-peak |
-| --- | --- | --- | --- | --- |
-| DeepSeek | 01:00 – 04:00 and 06:00 – 10:00 | Mon – Fri | ×2 | ×1 |
-| Z.ai (GLM coding plan) | 06:00 – 10:00 | Mon – Fri | ×3 quota | ×1 |
-| OpenCode Go / Zen | — | — | flat rate | flat rate |
+| Provider | Peak hours (UTC) | Days | Holidays | Peak | Off-peak |
+| --- | --- | --- | --- | --- | --- |
+| DeepSeek | 01:00 – 04:00 and 06:00 – 10:00 | Mon – Fri | 2026 CN calendar | ×2 | ×1 |
+| Z.ai (GLM coding plan) | 06:00 – 10:00 | Mon – Fri | none | ×3 quota | ×1 |
+| OpenCode Go | — | — | — | flat rate | flat rate |
 
 Those same hours in the providers' home timezones: DeepSeek peaks at 09:00 – 12:00 and 14:00 – 18:00 Beijing time (UTC+8), and Z.ai at 14:00 – 18:00 Singapore time (UTC+8) — so on a weekday afternoon the two overlap between 14:00 and 18:00 Beijing/Singapore.
 
-`windowKindAt` classifies an instant by both its UTC time of day and its UTC day of week; a window that wraps past midnight belongs to the day it starts on. The shipped boundaries are fixed in `src/defaults.ts`:
+`windowKindAt` classifies an instant by its UTC time of day, its UTC day of week, and the provider's holiday calendar; a window that wraps past midnight belongs to the day it starts on. `nextSwitchAt` reports the first instant the *aggregate* window kind actually changes, not merely the next raw boundary — adjacent (`01:00–04:00` + `04:00–06:00`) and overlapping (`01:00–05:00` + `04:00–06:00`) windows do not switch at their shared boundary, and a holiday that suppresses a would-be peak day pushes the next switch past the whole block. The shipped boundaries are fixed in `src/defaults.ts`:
 
-- DeepSeek — <https://api-docs.deepseek.com/quick_start/pricing> (*"Peak hours are 01:00 - 04:00 and 06:00 - 10:00 UTC, Monday through Friday"*)
+- DeepSeek — <https://api-docs.deepseek.com/quick_start/pricing> (*"Peak hours are 01:00 - 04:00 and 06:00 - 10:00 UTC, Monday through Friday"*, excluding Chinese public holidays)
 - Z.ai — <https://docs.z.ai/devpack/overview> (*"Peak hours: Monday to Friday, 14:00–18:00 Singapore Standard Time (UTC+8)"*)
 
-Every window, multiplier, and price is editable in Settings; the values above are only the defaults.
+The DeepSeek `holidays` list is a **2026 snapshot** of the Chinese public-holiday calendar as UTC dates (`YYYY-MM-DD`), cross-checked against <https://www.timeanddate.com/holidays/china/2026>. It must be refreshed annually — nothing fetches the new calendar for you.
+
+Every window, multiplier, price, and holiday list is editable in Settings; the values above are only the defaults.
 
 The prices are **the ones you type in**, multiplied by the multiplier. The plugin reads no pricing page and no billing data, so an official price change is a change you have to make yourself.
 
@@ -61,6 +63,8 @@ The bar itself carries the current window, the multiplier as `×N`, and the time
 
 Everything there is derived in the browser from the settings below and the browser's own clock, through the same pure module the host validates — so the pill cannot drift from the settings it reads.
 
+The pill reads the profile selected by `activeProviderId`. Provider selection is **manual**: the pill does not infer the provider of the current session, so when you switch gateways you switch the setting too.
+
 ## Configuration
 
 The `offpeak` settings namespace is registered with `applies: 'live'`: every field takes effect the moment you change it, with no restart.
@@ -73,10 +77,12 @@ The `offpeak` settings namespace is registered with `applies: 'live'`: every fie
 | `currency` | `USD` | Display currency (`USD` or `CNY`, converted with `cnyPerUsd`) |
 | `cnyPerUsd` | `7.1` | USD → CNY factor, used for display only |
 | `displayUtcOffsetMinutes` | `480` | Offset used to display switch times; the windows themselves are UTC |
-| `activeProviderId` | `deepseek-official` | Which provider profile the pill reads |
-| `providers[]` | see above | One profile per gateway: label, enabled, `peakWindows`, `peakMultiplier`, and the three base prices |
+| `activeProviderId` | `deepseek-official` | Which provider profile the pill reads (manual — not inferred from the session) |
+| `providers[]` | see above | One profile per gateway: label, enabled, `peakWindows`, `holidays`, `peakMultiplier`, and the three base prices |
 
-Each provider profile holds its own `peakWindows`, `peakMultiplier`, `inputPricePerM`, `cacheHitPricePerM`, and `outputPricePerM`. A window is editable as text — a day qualifier followed by `HH:MM-HH:MM` ranges — so DeepSeek ships as `Mon-Fri 01:00-04:00, 06:00-10:00` and Z.ai as `Mon-Fri 06:00-10:00`. A range written with no qualifier applies every day; an empty field means the provider bills a flat rate, and the pill then shows no countdown.
+Each provider profile holds its own `peakWindows`, `holidays`, `peakMultiplier`, `inputPricePerM`, `cacheHitPricePerM`, and `outputPricePerM`. A window is editable as text — a day qualifier followed by `HH:MM-HH:MM` ranges — so DeepSeek ships as `Mon-Fri 01:00-04:00, 06:00-10:00` and Z.ai as `Mon-Fri 06:00-10:00`. A range written with no qualifier applies every day; an empty field means the provider bills a flat rate, and the pill then shows no countdown.
+
+Settings persisted by v0.1.0 carried the pricing values at the top level (`inputPricePerM`, `cacheHitPricePerM`, `outputPricePerM`, `peakMultiplier`). On read they are migrated onto the DeepSeek provider profile; a value already set on the provider in the new shape takes precedence, and the next settings write re-persists the clean per-provider shape.
 
 The default DeepSeek prices are the official `deepseek-flash` off-peak prices in USD per 1M tokens: `0.15` input (cache miss), `0.003` cache hit, `0.6` output. The Z.ai profile ships no per-token prices, because a coding plan bills quota rather than tokens — only its multiplier is meaningful. On the day DeepSeek moves its prices, the defaults here go stale: they are editable, they are not fetched, and nothing verifies them.
 
@@ -138,7 +144,8 @@ Unit tests cannot see the seams that actually break — slot rendering, theme to
 
 - **The prices are yours, not DeepSeek's.** Nothing verifies them against the official pricing page or against what you were actually billed, so a stale table shows confidently wrong numbers.
 - **The shipped schedule is a snapshot.** The defaults were read from each provider's pricing page at the time of writing; if a provider moves a window, edit the profile — the boundaries are settings now, not code.
-- **The day gate is UTC.** Weekdays are evaluated in UTC, not in the provider's home timezone. For both shipped schedules that is what the providers publish, but a window that crosses a UTC midnight into a different local weekday would need the day list spelled out by hand.
+- **The DeepSeek holiday calendar is a 2026 snapshot.** The shipped `holidays` list covers 2026 only and nothing refreshes it automatically; after each Chinese New Year the list goes stale until you (or a plugin update) replace it.
+- **The day gate is UTC.** Weekdays and holiday dates are evaluated in UTC, not in the provider's home timezone. For both shipped schedules that is what the providers publish, but a window that crosses a UTC midnight into a different local weekday would need the day list spelled out by hand.
 - **The pill counts down against the browser's clock.** A machine with a badly wrong clock shows a badly wrong window.
 - **Web only.** The pill and the settings section are browser surfaces; a profile without the Web app loads the plugin and shows nothing.
 

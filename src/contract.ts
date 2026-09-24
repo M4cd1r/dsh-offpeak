@@ -59,6 +59,12 @@ export interface OffpeakProviderProfile {
   readonly peakMultiplier: number
   /** Daily peak windows in UTC; empty means "always off-peak" (flat rate). */
   peakWindows: PeakWindowSpec[]
+  /**
+   * UTC calendar dates (`YYYY-MM-DD`) on which no peak window is billed at all,
+   * whatever the window list says — DeepSeek excludes Chinese public holidays.
+   * Empty for providers without a published holiday rule.
+   */
+  readonly holidays: readonly string[]
   /** Input (cache-miss) price in USD per 1M tokens outside peak windows. */
   readonly inputPricePerM: number
   /** Cache-hit price in USD per 1M tokens outside peak windows. */
@@ -115,6 +121,7 @@ export const offpeakProviderProfileSchema = z.object({
   enabled: z.boolean(),
   peakMultiplier: z.number().min(1).max(100),
   peakWindows: z.array(peakWindowSpecSchema).readonly(),
+  holidays: z.array(z.string().regex(/^\d{4}-\d{2}-\d{2}$/u)).readonly(),
   inputPricePerM: z.number().min(0),
   cacheHitPricePerM: z.number().min(0),
   outputPricePerM: z.number().min(0),

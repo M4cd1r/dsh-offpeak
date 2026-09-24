@@ -59,9 +59,9 @@ export function OffpeakPill({ useSettings, t }: OffpeakPillProps): ReactElement 
   const profile = resolveActiveProfile(settings)
   const peakBilling = billsPeak(profile)
   const date = new Date(now)
-  const win = peakBilling ? windowKindAt(date, profile.peakWindows) : 'offpeak'
+  const win = peakBilling ? windowKindAt(date, profile.peakWindows, profile.holidays) : 'offpeak'
   const multiplier = peakBilling && win === 'peak' ? profile.peakMultiplier : 1
-  const next = peakBilling ? nextSwitchAt(date, profile.peakWindows) : null
+  const next = peakBilling ? nextSwitchAt(date, profile.peakWindows, profile.holidays) : null
   const countdown = next === null ? '' : formatDuration(Math.max(0, next.at.getTime() - now))
   const symbol = settings.currency === 'CNY' ? t('currencySymbolCny') : t('currencySymbolUsd')
   const windowKey: OffpeakKey = !peakBilling ? 'window.flat' : win === 'peak' ? 'window.peak' : 'window.offpeak'

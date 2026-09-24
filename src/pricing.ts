@@ -2,8 +2,9 @@
  * Pure off-peak pricing engine, parameterised per provider.
  *
  * Every window is a daily `HH:MM`–`HH:MM` range in UTC taken from the active
- * provider's profile, optionally gated to a set of weekdays, so the same engine
- * serves DeepSeek (two weekday windows, ×2), a gateway with its own hours, and
+ * provider's profile, optionally gated to a set of weekdays and suppressed on
+ * the provider's holiday dates, so the same engine serves DeepSeek (two weekday
+ * windows, ×2, no Chinese public holidays), a gateway with its own hours, and
  * a flat-rate gateway with no windows at all. Everything here is a pure
  * function of its inputs — no I/O, no state — so the module the host validates
  * is the same one bundled into the browser, where the status pill derives the
@@ -177,19 +178,20 @@ function boundariesOf(window: PeakWindowSpec): Boundary[] {
 }
 
 /**
- * Every boundary that does fire inside the lookahead, paired with the switch it
- * produces. A boundary whose day is excluded by the window's day list is
- * dropped, so a weekday-only window never reports a Saturday or Sunday switch.
+ * Every boundary instant that fires inside the lookahead. A boundary whose day
+ * is excluded by the window's day list is dropped, so a weekday-only window
+ * never reports a Saturday or Sunday switch.
  */
-function activeBoundaries(base: Date, windows: readonly PeakWindowSpec[]): { at: Date; opens: boolean }[] {
-  const active: { at: Date; opens: boolean }[] = []
+function activeBoundaries(base: Date, windows: readonly PeakWindowSpec[], horizon: number): Date[] {
+  const active: Date[] = []
   for (const window of windows) {
     for (const boundary of boundariesOf(window)) {
       // A window repeats every seven days, so one cycle either side of the
-      // reference instant covers every boundary that can matter.
-      for (let dayOffset = -1; dayOffset <= 7; dayOffset += 1) {
+      // reference instant covers every boundary that can matter — plus the
+      // holiday horizon the caller passes when a calendar is in play.
+      for (let dayOffset = -1; dayOffset <= horizon; dayOffset += 1) {
         if (!boundaryFiresOn(boundary, dayOfWeek(base, dayOffset))) continue
-        active.push({ at: utcDateAtMinutes(base, boundary.minutes, dayOffset), opens: boundary.opens })
+        active.push(utcDateAtMinutes(base, boundary.minutes, dayOffset))
       }
     }
   }
@@ -218,13 +220,20 @@ function windowContains(window: PeakWindowSpec, minutes: number): boolean {
 }
 
 /**
- * The pricing window containing one instant, honouring both the window's clock
- * range and its weekday gate.
+ * The pricing window containing one instant, honouring the window's clock
+ * range, its weekday gate, and the provider's holiday calendar: a listed UTC
+ * date is off-peak for the whole day regardless of the other gates.
  * @param date - the instant to classify.
  * @param windows - the active provider's peak windows (empty ⇒ always off-peak).
+ * @param holidays - the provider's holiday dates (`YYYY-MM-DD`, UTC).
  * @returns the window kind.
  */
-export function windowKindAt(date: Date, windows: readonly PeakWindowSpec[] = DEEPSEEK_PEAK_WINDOWS): OffpeakWindowKind {
+export function windowKindAt(
+  date: Date,
+  windows: readonly PeakWindowSpec[] = DEEPSEEK_PEAK_WINDOWS,
+  holidays: readonly string[] = [],
+): OffpeakWindowKind {
+  if (holidays.length > 0 && holidays.includes(utcDateKey(date))) return 'offpeak'
   const minutes = utcMinutesOf(date)
   const today = dayOfWeek(date, 0)
   const yesterday = dayOfWeek(date, -1)
@@ -259,25 +268,92 @@ function utcDateAtMinutes(base: Date, minutes: number, dayOffset: number): Date 
   return date
 }
 
+/** The UTC calendar date of an instant as `YYYY-MM-DD` (the holiday-list key). */
+export function utcDateKey(date: Date): string {
+  return date.toISOString().slice(0, 10)
+}
+
+/** Milliseconds in one day. */
+const DAY_MS = 86_400_000
+
 /**
- * The next window switch strictly after `date`, skipping boundaries whose day
- * the window excludes.
+ * The longest run of consecutive dates in the holiday calendar (0 when empty).
+ * A holiday block can push the first unsuppressed window boundary a full run
+ * past the weekly cycle, so the switch lookahead grows by this length.
+ * Unparseable entries are ignored rather than trusted.
+ */
+function longestHolidayRun(holidays: readonly string[]): number {
+  if (holidays.length === 0) return 0
+  const days = new Set<number>()
+  for (const holiday of holidays) {
+    const time = Date.parse(`${holiday}T00:00:00Z`)
+    if (!Number.isNaN(time)) days.add(time)
+  }
+  let longest = 0
+  for (const day of days) {
+    // Count a run from its first day only; earlier members are skipped.
+    if (days.has(day - DAY_MS)) continue
+    let run = 1
+    while (days.has(day + run * DAY_MS)) run += 1
+    if (run > longest) longest = run
+  }
+  return longest
+}
+
+/**
+ * The UTC midnights inside the lookahead at which the holiday calendar toggles
+ * on or off. A midnight is a switch candidate only on the days the calendar
+ * actually changes: a holiday that merely continues into the next day leaves
+ * the aggregate kind alone (and the flip check below would drop it anyway).
+ */
+function holidayMidnights(base: Date, holidays: readonly string[], horizon: number): Date[] {
+  if (holidays.length === 0) return []
+  const calendar = new Set(holidays)
+  const midnights: Date[] = []
+  for (let dayOffset = 0; dayOffset <= horizon; dayOffset += 1) {
+    const at = utcDateAtMinutes(base, 0, dayOffset)
+    const today = utcDateKey(at)
+    const yesterday = utcDateKey(utcDateAtMinutes(base, 0, dayOffset - 1))
+    if (calendar.has(today) !== calendar.has(yesterday)) midnights.push(at)
+  }
+  return midnights
+}
+
+/**
+ * The next window switch strictly after `date`: the first instant at which the
+ * *aggregate* window kind actually changes, not merely the next raw window
+ * boundary. Two windows that are adjacent (`01:00–04:00` + `04:00–06:00`) or
+ * overlapping (`01:00–05:00` + `04:00–06:00`) never switch at their shared
+ * boundary, and a holiday that suppresses a would-be peak day is reflected by
+ * skipping that day's boundaries (or by the UTC midnight that ends a wrap
+ * window's post-midnight hours).
  * @param date - the reference instant.
  * @param windows - the active provider's peak windows.
- * @returns the switch instant and the window that begins there, or `null` when
- *          the provider declares no windows (a flat rate never switches).
+ * @param holidays - the provider's holiday dates (`YYYY-MM-DD`, UTC).
+ * @returns the switch instant and the kind that begins there, or `null` when
+ *          the schedule never changes kind (a flat rate never switches).
  */
 export function nextSwitchAt(
   date: Date,
   windows: readonly PeakWindowSpec[] = DEEPSEEK_PEAK_WINDOWS,
+  holidays: readonly string[] = [],
 ): { at: Date; to: OffpeakWindowKind } | null {
-  const candidates = activeBoundaries(date, windows)
-  if (candidates.length === 0) return null
+  const current = windowKindAt(date, windows, holidays)
+  // One weekly window cycle plus the longest holiday run guarantees the first
+  // unsuppressed boundary is inside the lookahead.
+  const horizon = 7 + longestHolidayRun(holidays)
+  const candidates = [
+    ...activeBoundaries(date, windows, horizon),
+    ...holidayMidnights(date, holidays, horizon),
+  ]
   let best: { at: Date; to: OffpeakWindowKind } | undefined
-  for (const candidate of candidates) {
-    if (candidate.at.getTime() <= date.getTime()) continue
-    if (best !== undefined && candidate.at.getTime() >= best.at.getTime()) continue
-    best = { at: candidate.at, to: candidate.opens ? 'peak' : 'offpeak' }
+  for (const at of candidates) {
+    if (at.getTime() <= date.getTime()) continue
+    if (best !== undefined && at.getTime() >= best.at.getTime()) continue
+    // Until the first real change the kind equals the current one, so the
+    // earliest candidate that differs is exactly the first actual switch.
+    const to = windowKindAt(at, windows, holidays)
+    if (to !== current) best = { at, to }
   }
   return best ?? null
 }
@@ -286,10 +362,15 @@ export function nextSwitchAt(
  * Milliseconds until the next window switch, or `null` for a flat-rate profile.
  * @param now - the reference instant.
  * @param windows - the active provider's peak windows.
+ * @param holidays - the provider's holiday dates (`YYYY-MM-DD`, UTC).
  * @returns the positive delay, or `null` when no switch is ever scheduled.
  */
-export function msUntilNextSwitch(now: Date, windows: readonly PeakWindowSpec[] = DEEPSEEK_PEAK_WINDOWS): number | null {
-  const next = nextSwitchAt(now, windows)
+export function msUntilNextSwitch(
+  now: Date,
+  windows: readonly PeakWindowSpec[] = DEEPSEEK_PEAK_WINDOWS,
+  holidays: readonly string[] = [],
+): number | null {
+  const next = nextSwitchAt(now, windows, holidays)
   if (next === null) return null
   return Math.max(1, next.at.getTime() - now.getTime())
 }

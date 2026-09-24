@@ -29,7 +29,7 @@ const check = (label, actual, expected) => {
   console.log(`${ok ? 'ok  ' : 'FAIL'} ${label}${ok ? '' : ` — expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`}`)
 }
 
-const { windowKindAt, nextSwitchAt, defaultProviderProfiles, resolveActiveProfile, applySettingsUpdate, defaultOffpeakSettings } = mod
+const { windowKindAt, nextSwitchAt, defaultProviderProfiles, resolveActiveProfile, applySettingsUpdate, defaultOffpeakSettings, normalizeOffpeakSettings } = mod
 
 const profiles = defaultProviderProfiles()
 const deepseek = profiles.find(p => p.id === 'deepseek-official')
@@ -53,7 +53,11 @@ check('zai ships its own window (14:00-18:00 UTC+8 = 06:00-10:00 UTC)', zai.peak
 ])
 check('zai peaks at 3x', zai.peakMultiplier, 3)
 check('zai is enabled', zai.enabled, true)
+check('deepseek ships the 2026 holiday calendar (33 dates)', deepseek.holidays.length, 33)
+check('zai ships no holiday calendar', zai.holidays, [])
+check('opencode ships no holiday calendar', opencode.holidays, [])
 check('the two peak providers disagree on the window', JSON.stringify(dsw) !== JSON.stringify(zai.peakWindows), true)
+check('OpenCode Go is the only flat subscription profile', opencode.label, 'OpenCode Go')
 
 // 2026-09-15 is a Tuesday; 2026-09-19 is a Saturday.
 const tue = (hour, minute = 0) => new Date(Date.UTC(2026, 8, 15, hour, minute))
@@ -87,6 +91,25 @@ check('deepseek switch from Fri 17:00Z skips the weekend to Mon 01:00Z', nextSwi
 check('opencode is never peak', windowKindAt(tue(2), opencode.peakWindows), 'offpeak')
 check('opencode has no next switch', nextSwitchAt(tue(2), opencode.peakWindows), null)
 
+// Holidays ride on the profile: a listed UTC weekday is off-peak, the adjacent
+// ordinary weekday peaks, and the next switch skips the whole holiday block.
+check('Mon 2026-10-05 08:00Z is off-peak on the deepseek calendar', windowKindAt(new Date('2026-10-05T08:00:00Z'), dsw, deepseek.holidays), 'offpeak')
+check('Thu 2026-10-08 08:00Z peaks after the holiday week', windowKindAt(new Date('2026-10-08T08:00:00Z'), dsw, deepseek.holidays), 'peak')
+check('the next switch skips the National Day block', nextSwitchAt(new Date('2026-09-30T20:00:00Z'), dsw, deepseek.holidays).at.toISOString(), '2026-10-08T01:00:00.000Z')
+check('zai has no holidays to honor', windowKindAt(new Date('2026-10-05T08:00:00Z'), zai.peakWindows, zai.holidays), 'peak')
+
+// Adjacent/overlapping windows switch only when the aggregate kind changes.
+const adjacentWindows = [
+  { start: '01:00', end: '04:00', days: WEEKDAYS },
+  { start: '04:00', end: '06:00', days: WEEKDAYS },
+]
+check('adjacent windows do not switch at the shared 04:00 boundary', nextSwitchAt(tue(2), adjacentWindows).at.toISOString(), '2026-09-15T06:00:00.000Z')
+const overlappingWindows = [
+  { start: '01:00', end: '05:00', days: WEEKDAYS },
+  { start: '04:00', end: '06:00', days: WEEKDAYS },
+]
+check('overlapping windows do not switch inside the overlap either', nextSwitchAt(tue(2), overlappingWindows).at.toISOString(), '2026-09-15T06:00:00.000Z')
+
 // A provider whose window wraps midnight and runs on weekends only.
 const wrap = [{ start: '22:00', end: '02:00', days: [6, 7] }]
 check('wrap window: Saturday 23:00Z is peak', windowKindAt(sat(23), wrap), 'peak')
@@ -108,6 +131,24 @@ check('provider edit replaces only the matching profile', edited.providers.lengt
 check('provider edit completed the omitted day list', edited.providers.find(p => p.id === 'zai').peakWindows, [{ start: '00:00', end: '08:00', days: [] }])
 check('provider edit left deepseek untouched', edited.providers.find(p => p.id === 'deepseek-official').peakWindows, dsw)
 check('unknown active id falls back to the first provider', resolveActiveProfile({ ...settings, activeProviderId: 'nope' }).id, 'deepseek-official')
+
+// The v0.1.0 top-level pricing fields migrate onto the deepseek profile, with
+// new-shape provider values taking precedence.
+const legacyShape = {
+  ...defaultOffpeakSettings(),
+  inputPricePerM: 0.28,
+  cacheHitPricePerM: 0.028,
+  outputPricePerM: 0.42,
+  peakMultiplier: 3,
+}
+const migrated = normalizeOffpeakSettings(legacyShape)
+const migratedDeepseek = migrated.providers.find(p => p.id === 'deepseek-official')
+check('legacy pricing migrates onto deepseek', [migratedDeepseek.inputPricePerM, migratedDeepseek.cacheHitPricePerM, migratedDeepseek.outputPricePerM, migratedDeepseek.peakMultiplier], [0.28, 0.028, 0.42, 3])
+const hybridShape = {
+  ...legacyShape,
+  providers: defaultProviderProfiles().map(p => p.id === 'deepseek-official' ? { ...p, inputPricePerM: 0.2 } : p),
+}
+check('a new-shape provider value wins over the legacy value', normalizeOffpeakSettings(hybridShape).providers.find(p => p.id === 'deepseek-official').inputPricePerM, 0.2)
 
 console.log(failures === 0 ? '\nALL CHECKS PASSED' : `\n${failures} CHECK(S) FAILED`)
 process.exit(failures === 0 ? 0 : 1)
